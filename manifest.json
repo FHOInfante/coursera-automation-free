@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Course Automation",
+  "version": "1.1.0",
+  "author": "Personal Use",
+  "description": "Automate Coursera course tasks: quiz, video, reading material, ungraded plugin, and discussion completion.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "commands",
+    "downloads"
+  ],
+  "background": {
+    "service_worker": "dist/scripts/background.js"
+  },
+  "icons": {
+    "16": "dist/assets/icon16.png",
+    "32": "dist/assets/icon32.png",
+    "48": "dist/assets/icon48.png",
+    "128": "dist/assets/icon128.png"
+  },
+  "action": {
+    "default_popup": "dist/popup.html"
+  },
+  "options_page": "dist/settings.html",
+  "content_scripts": [
+    {
+      "run_at": "document_start",
+      "matches": ["*://*.coursera.org/*"],
+      "js": ["dist/scripts/interceptor.js", "dist/scripts/content.js"],
+      "css": ["dist/ui/content.css"]
+    }
+  ],
+  "commands": {
+    "open_popup_1": {
+      "suggested_key": {
+        "default": "Alt+B",
+        "mac": "Command+B"
+      },
+      "description": "Open Course Automation popup with Alt+B"
+    },
+    "open_popup_2": {
+      "suggested_key": {
+        "default": "Alt+W",
+        "mac": "Command+W"
+      },
+      "description": "Open Course Automation popup with Alt+W"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/scripts/inject.js"],
+      "matches": ["*://*.coursera.org/*"]
+    }
+  ],
+  "host_permissions": ["*://*.coursera.org/*"]
+}
