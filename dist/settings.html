@@ -8,105 +8,23 @@
 </head>
 <body>
   <div class="container">
-    <header>
-      <h1>Settings</h1>
-    </header>
+    <header><h1>Settings</h1></header>
 
-    <div class="tabs">
-      <div class="tab active" data-tab="general">General</div>
-      <div class="tab" data-tab="backup">Course Backup</div>
-    </div>
+    <section>
+      <h3>Groq API Key (required for quiz solving)</h3>
+      <div class="setting-item" style="flex-direction:column;align-items:stretch;gap:4px;">
+        <label for="groqApiKey">API Key</label>
+        <input type="password" id="groqApiKey" placeholder="gsk_..." style="width:100%;" />
+        <div class="note" style="font-size:11px;color:#94a3b8;">Get a free key at <a href="https://console.groq.com/keys" target="_blank" style="color:#60a5fa;">console.groq.com</a></div>
+      </div>
+      <div class="setting-item">
+        <label>Model</label>
+        <span style="color:#94a3b8;">llama-3.3-70b-versatile (hardcoded)</span>
+      </div>
+    </section>
 
-    <div id="general" class="tab-content active">
-      <section>
-        <h3>AI Quiz Answers</h3>
-        <div class="setting-item">
-          <label for="aiProvider">AI Provider</label>
-          <select id="aiProvider">
-            <option value="openrouter">OpenRouter (Free credits available)</option>
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="none">None (random answers)</option>
-          </select>
-        </div>
-        <div class="setting-item" style="flex-direction:column;align-items:stretch;gap:4px;">
-          <label for="apiKey">API Key</label>
-          <input type="password" id="apiKey" placeholder="sk-..." style="width:100%;" />
-        </div>
-        <div class="setting-item">
-          <label for="aiModel">Model</label>
-          <select id="aiModel">
-            <option value="openai/gpt-4o-mini">GPT-4o Mini (fast/cheap)</option>
-            <option value="openai/gpt-4o">GPT-4o</option>
-            <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-            <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
-            <option value="gpt-4o-mini">OpenAI GPT-4o Mini</option>
-            <option value="gpt-4o">OpenAI GPT-4o</option>
-          </select>
-        </div>
-      </section>
-
-      <section>
-        <h3>Automation Settings</h3>
-        <div class="setting-item">
-          <label for="autoQuizToggle">Auto Quiz Attempt</label>
-          <input type="checkbox" id="autoQuizToggle" />
-        </div>
-        <div class="setting-item">
-          <label for="autoSubmitQuizToggle">Auto Submit Quiz</label>
-          <input type="checkbox" id="autoSubmitQuizToggle" />
-        </div>
-        <div class="setting-item">
-          <label for="autoNextToggle">Auto Navigate to Next Item</label>
-          <input type="checkbox" id="autoNextToggle" />
-        </div>
-        <div class="setting-item">
-          <label for="speechToggle">Enable Speech Guide</label>
-          <input type="checkbox" id="speechToggle" />
-        </div>
-      </section>
-
-      <section>
-        <h3>Skip Video+</h3>
-        <div class="setting-item">
-          <label for="skipSpeed">Playback Speed</label>
-          <select id="skipSpeed">
-            <option value="2">2x</option>
-            <option value="4">4x</option>
-            <option value="8">8x</option>
-            <option value="16">16x</option>
-          </select>
-        </div>
-        <div class="setting-item">
-          <label for="skipThreshold">Skip Threshold (%)</label>
-          <input type="number" id="skipThreshold" min="50" max="100" value="90" />
-        </div>
-      </section>
-
-      <button id="saveGeneralBtn">Save Settings</button>
-      <div id="generalStatus"></div>
-    </div>
-
-    <div id="backup" class="tab-content">
-      <section>
-        <h3>Course Backup Settings</h3>
-        <label for="concurrency">Concurrent Downloads</label>
-        <input type="number" id="concurrency" min="1" max="10" value="5" />
-
-        <label for="quality">Video Quality</label>
-        <select id="quality">
-          <option value="720p">720p</option>
-          <option value="540p">540p</option>
-          <option value="360p">360p</option>
-        </select>
-
-        <label for="subtitle">Subtitle Language</label>
-        <select id="subtitle"></select>
-      </section>
-
-      <button id="saveBackupBtn">Save Settings</button>
-      <div id="backupStatus"></div>
-    </div>
+    <button id="saveBtn">Save</button>
+    <div id="status"></div>
   </div>
 
   <script src="scripts/settings.js"></script>

@@ -55,5 +55,5 @@
       "matches": ["*://*.coursera.org/*"]
     }
   ],
-  "host_permissions": ["*://*.coursera.org/*"]
+  "host_permissions": ["*://*.coursera.org/*", "*://*.groq.com/*"]
 }

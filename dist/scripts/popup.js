@@ -1,11 +1,6 @@
 (function () {
   const FEATURES = [
-    { id: 'completeLectures', label: 'Complete Lectures', icon: '🎬', desc: 'Mark current page as complete' },
     { id: 'quizAutomation', label: 'Quiz Automation', icon: '✅', desc: 'Answer quiz on current page' },
-    { id: 'completeDiscussions', label: 'Discussions', icon: '💬', desc: 'Complete discussion on current page' },
-    { id: 'completeUngraded', label: 'Ungraded Plugins', icon: '🧩', desc: 'Complete ungraded plugin on current page' },
-    { id: 'shareableLink', label: 'Shareable Link', icon: '🔗', desc: 'Generate shareable submission link' },
-    { id: 'courseBackup', label: 'Course Backup', icon: '💾', desc: 'Download course materials' },
   ];
 
   const featureGrid = document.getElementById('featureGrid');
@@ -42,7 +37,7 @@
         statusFill.style.width = pct + '%';
       } else if (r && r.status === 'done') {
         statusEl.classList.remove('hidden');
-        statusMsg.textContent = `✅ Done — ${r.stats.completed} items completed`;
+        statusMsg.textContent = `\u2705 Done \u2014 ${r.stats.completed} items completed`;
         statusFill.style.width = '100%';
         if (pollTimer) clearTimeout(pollTimer);
         return;
@@ -69,7 +64,7 @@
   function handleFeatureClick(featureId) {
     const btn = document.getElementById(featureId);
     const originalText = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span>⏳ Processing...</span>'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span>\u23F3 Processing...</span>'; }
 
     chrome.runtime.sendMessage({ type: 'QUERY_TAB' }, (response) => {
       if (!response || !response.url) {
@@ -89,16 +84,16 @@
       }, (result) => {
         if (btn) { btn.disabled = false; if (originalText) btn.innerHTML = originalText; }
         if (featureId === 'runAll') {
-          setStatus('▶️ Running... Check Coursera page overlay');
+          setStatus('\u25B6\uFE0F Running... Check Coursera page overlay');
           statusEl.classList.remove('hidden');
           statusMsg.textContent = 'Running...';
           pollStatus();
           return;
         }
-        if (result && result.success) setStatus('✅ ' + (result.message || 'Done!'));
-        else if (result && result.error) setStatus('⚠️ ' + result.error, true);
-        else if (chrome.runtime.lastError) setStatus('⚠️ Reload Coursera page and try again', true);
-        else setStatus('✅ Sent!');
+        if (result && result.success) setStatus('\u2705 ' + (result.message || 'Done!'));
+        else if (result && result.error) setStatus('\u26A0\uFE0F ' + result.error, true);
+        else if (chrome.runtime.lastError) setStatus('\u26A0\uFE0F Reload Coursera page and try again', true);
+        else setStatus('\u2705 Sent!');
       });
     });
   }
