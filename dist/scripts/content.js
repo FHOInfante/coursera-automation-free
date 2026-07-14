@@ -69,21 +69,26 @@
     C.currentItem = msg;
   }
 
+  function storageKey(slug) { return `caState_${slug || C.slug || getCourseSlug() || 'default'}`; }
+
   async function save() {
-    await chrome.storage.local.set({ caState: C });
+    const key = storageKey();
+    if (key) await chrome.storage.local.set({ [key]: C });
   }
 
-  async function load() {
-    const data = await chrome.storage.local.get('caState');
-    if (data.caState) {
-      C = { ...C, ...data.caState };
+  async function load(slug) {
+    const key = storageKey(slug);
+    const data = await chrome.storage.local.get(key);
+    if (data[key]) {
+      C = { ...C, ...data[key] };
       for (const k of ['scanPhase','allScannedItems','scannedModules','quizCorrectAnswers','quizAttempts','moduleVisits','allItemIds','recentUrls']) delete C[k];
     }
   }
 
   async function clearState() {
+    const key = storageKey();
     C = { ...C, status: 'idle', phase: 'idle', items: [], completedItems: [], stats: { total: 0, completed: 0, failed: 0, skipped: 0 }, lastPageUrl: '', samePageCount: 0, navigatingToItem: '', rateLimited: false };
-    await chrome.storage.local.set({ caState: null });
+    if (key) await chrome.storage.local.remove(key);
   }
 
   function getStatus() {
@@ -91,6 +96,7 @@
   }
 
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function throwIfStopped() { if (C.status !== 'running') throw new Error('__STOPPED__'); }
 
   function getCourseSlug() { const m = location.pathname.match(/\/learn\/([^/]+)/); return m ? m[1] : null; }
   function getCurrentModuleNumber() { const m = location.pathname.match(/\/module\/(\d+)/); return m ? parseInt(m[1]) : null; }
@@ -139,6 +145,26 @@
     ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
       el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
     });
+  }
+
+  function clickBackButton() {
+    const backBtn = document.querySelector(
+      '[data-testid="tunnel-vision-back-button"], [data-testid="exit-button"], [data-testid="back-button"], [data-e2e="back-button"], .back-button, [class*="backButton"], [class*="back-button"], button[class*="Back"], a[class*="Back"], [aria-label*="Back" i], [aria-label*="back to" i]'
+    ) || [...document.querySelectorAll('button, a, [role="button"]')].find(el => {
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.offsetParent === null) return false;
+      const text = el.textContent.trim();
+      return /^Back$/i.test(text) || /^<[\s\u00AB]/i.test(text) || /[\u2190\u2199]/i.test(text);
+    });
+    if (backBtn) { log('Clicking back button'); clickElement(backBtn); return true; }
+    const nav = document.querySelector('nav[class*="top"], [class*="header"]');
+    if (nav) {
+      const links = [...nav.querySelectorAll('a')];
+      const courseLink = links.find(a => /coursera\.org\/learn/i.test(a.href) && !a.href.includes(location.pathname.split('/').filter(Boolean).slice(0, 4).join('/')));
+      if (courseLink) { log('Navigating back via course link'); navigateTo(`/learn/${C.slug}/home/module/${C.currentModule}`); return true; }
+    }
+    log('No back button found, navigating to module page');
+    navigateTo(`/learn/${C.slug}/home/module/${C.currentModule}`);
+    return true;
   }
 
   function findCompletionToggleInItem(itemEl) {
@@ -190,6 +216,7 @@
   async function clickMarkCompleteButton(item) {
     let btn = null;
     for (let s = 0; s < 5; s++) {
+      throwIfStopped();
       window.scrollTo(0, document.body.scrollHeight * (s + 1) / 5);
       await delay(600);
       btn = findPageCompleteButton();
@@ -215,6 +242,7 @@
   async function seekVideoToEnd() {
     let video;
     for (let i = 0; i < 15; i++) {
+      throwIfStopped();
       video = document.querySelector('video');
       if (video && video.duration && isFinite(video.duration) && video.duration > 0) break;
       await delay(1000);
@@ -230,6 +258,7 @@
   }
 
   async function completeItemOnPage(item) {
+    throwIfStopped();
     log(`Completing ${item.type}: ${item.id}`);
     await delay(2000);
 
@@ -337,11 +366,13 @@
     const url = 'https://api.groq.com/openai/v1/chat/completions';
     const body = { model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 4096 };
     for (;;) {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` },
-        body: JSON.stringify(body),
-      });
+      throwIfStopped();
+      const controller = new AbortController();
+      const stopCheck = setInterval(() => { if (C.status !== 'running') controller.abort(); }, 400);
+      let r;
+      try { r = await fetch(url, { signal: controller.signal, method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` }, body: JSON.stringify(body) }); }
+      catch (e) { clearInterval(stopCheck); if (e.name === 'AbortError') { log('Groq fetch aborted — stopped by user'); throw new Error('__STOPPED__'); } throw e; }
+      clearInterval(stopCheck);
       if (r.ok) {
         groqConsecutiveRateLimits = 0;
         clearRetryOverlay();
@@ -356,7 +387,7 @@
       if (groqConsecutiveRateLimits >= 2) { showExpiredOverlay(); throw new Error('Groq API daily usage expired — use a different API key'); }
       showRetryOverlay(30);
       log(`Groq quota hit (attempt ${groqConsecutiveRateLimits}), waiting 30s... (${errText.slice(0, 120)})`);
-      for (let i = 30; i > 0; i--) { updateRetryOverlay(i); await delay(1000); }
+      for (let i = 30; i > 0; i--) { throwIfStopped(); updateRetryOverlay(i); await delay(1000); }
     }
   }
 
@@ -501,6 +532,7 @@
 
   async function clickStartButton() {
     for (let i = 0; i < 15; i++) {
+      throwIfStopped();
       const btn = document.querySelector('button[aria-label*="Start" i], button[aria-label*="Resume" i], button[aria-label*="Try again" i]');
       if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') { btn.click(); await delay(2000); return true; }
       const textMatch = [...document.querySelectorAll('button')].find(b => {
@@ -514,11 +546,13 @@
   }
 
   async function solveQuizOnPage() {
+    throwIfStopped();
     log('Solving quiz...');
     await delay(2000);
     await clickStartButton();
 
     for (let i = 0; i < 10; i++) {
+      throwIfStopped();
       const continueBtn = document.querySelector('[data-testid="StartAttemptModal__primary-button"]:not([disabled])');
       if (continueBtn) { clickElement(continueBtn); await delay(2000); break; }
       await delay(500);
@@ -526,6 +560,7 @@
 
     let questions = [];
     for (let i = 0; i < 20; i++) {
+      throwIfStopped();
       const qEls = getQuizQuestionElements();
       if (qEls.length > 0) { questions = [...qEls].map(extractQuestionData); break; }
       await delay(1000);
@@ -544,6 +579,7 @@
       ackBtn.click();
       await delay(2000);
       for (let i = 0; i < 10; i++) {
+        throwIfStopped();
         const qEls = getQuizQuestionElements();
         if (qEls.length > 0) { questions = [...qEls].map(extractQuestionData); break; }
         await delay(1000);
@@ -601,7 +637,14 @@ ${promptParts.join('\n\n')}`;
       return map;
     }, {});
 
+    const answeredCount = Object.keys(answerMap).length;
+    if (answeredCount < questions.length) {
+      log(`LLM only answered ${answeredCount}/${questions.length} questions — skipping`);
+      throw new Error('SKIP_ITEM: LLM could not answer all questions');
+    }
+
     for (let qIdx = 0; qIdx < questions.length; qIdx++) {
+      throwIfStopped();
       const q = questions[qIdx];
       const num = qIdx + 1;
       const answers = answerMap[num] || [];
@@ -631,6 +674,7 @@ ${promptParts.join('\n\n')}`;
 
     let submitBtn = null;
     for (let i = 0; i < 15; i++) {
+      throwIfStopped();
       submitBtn = document.querySelector('button[data-testid="submit-button"]:not([disabled])') ||
         document.querySelector('button[data-test="submit-button"]:not([disabled])') ||
         document.querySelector('button[data-test="submit"]:not([disabled])') ||
@@ -645,9 +689,23 @@ ${promptParts.join('\n\n')}`;
 
     if (submitBtn) {
       submitBtn.click();
-      for (let i = 0; i < 10; i++) { await delay(500); const cb = document.querySelector('[data-testid="dialog-submit-button"]:not([disabled])'); if (cb) { cb.click(); await delay(1000); break; } }
-      for (let i = 0; i < 20; i++) { await delay(1000); if (document.querySelector('[data-testid="grading-in-progress-screen"], [data-test="grading"], [class*="grading"], [data-test="correct"], .correct-feedback, [data-test="quiz-result"]')) break; }
+      let incompleteDetected = false;
+      for (let i = 0; i < 10; i++) { throwIfStopped(); await delay(500); const cb = document.querySelector('[data-testid="dialog-submit-button"]:not([disabled])'); if (cb) { cb.click(); await delay(1500); break; } }
+      for (let i = 0; i < 8; i++) {
+        throwIfStopped(); await delay(500);
+        const dialog = document.querySelector('[data-testid="scroll-container"][role="alertdialog"], [role="alertdialog"][data-testid*="dialog"], [data-e2e="SubmitDialog__heading"]') ||
+          [...document.querySelectorAll('[role="alertdialog"], [role="dialog"], [data-testid*="dialog"]')].find(d => /missing or invalid|incomplete|unanswered/i.test(d.textContent));
+        if (dialog) {
+          const cancelBtn = dialog.querySelector('[data-testid="dialog-cancel-button"]') ||
+            [...dialog.querySelectorAll('button')].find(b => /cancel|go back/i.test(b.textContent.trim()) && !b.disabled);
+          if (cancelBtn) { log('Incomplete answers dialog — cancelling submission'); clickElement(cancelBtn); await delay(1000); incompleteDetected = true; break; }
+        }
+        if (document.querySelector('[data-testid="grading-in-progress-screen"], [data-test="grading"], [class*="grading"]')) break;
+      }
+      if (incompleteDetected) throw new Error('SKIP_ITEM: Quiz has incomplete answers — cancelled submission');
+      for (let i = 0; i < 20; i++) { throwIfStopped(); await delay(1000); if (document.querySelector('[data-testid="grading-in-progress-screen"], [data-test="grading"], [class*="grading"], [data-test="correct"], .correct-feedback, [data-test="quiz-result"]')) break; }
       for (let i = 0; i < 60; i++) {
+        throwIfStopped();
         await delay(1000);
         const cb = [...document.querySelectorAll('button')].find(b => /continue|next|view score|try again/i.test(b.textContent.trim()) && !b.disabled);
         if (cb) { cb.click(); await delay(2000); break; }
@@ -663,6 +721,7 @@ ${promptParts.join('\n\n')}`;
 
   async function waitForItems() {
     for (let i = 0; i < 25; i++) {
+      throwIfStopped();
       await delay(1000);
       for (const sel of ITEM_SELECTORS) { if (document.querySelector(sel)) return true; }
       if (findItemLinksDeep().length > 0) return true;
@@ -767,6 +826,7 @@ ${promptParts.join('\n\n')}`;
   }
 
   async function runPhase1() {
+    throwIfStopped();
     C.phase = 'api'; await save();
     log(`Phase 1 on module ${getCurrentModuleNumber() || C.currentModule}`);
     const moduleNum = getCurrentModuleNumber();
@@ -846,6 +906,7 @@ ${promptParts.join('\n\n')}`;
       if (!C.completedItems.includes(itemId)) C.completedItems.push(itemId);
       C.stats.completed++; log(`Quiz ${itemId} completed`);
     } catch (err) {
+      if (err.message === '__STOPPED__') { log('Quiz stopped by user'); await save(); return; }
       if (err.message && err.message.startsWith('SKIP_ITEM:')) {
         console.warn('CA: quiz skipped —', err.message);
         C.stats.skipped++;
@@ -855,6 +916,9 @@ ${promptParts.join('\n\n')}`;
       }
       if (!C.completedItems.includes(itemId)) C.completedItems.push(itemId);
       log(`Quiz ${itemId} skipped/failed: ${err.message}`);
+      await save(); await delay(500);
+      clickBackButton();
+      return;
     }
     await save(); await delay(1500);
     if (await navigateToNextItem()) return;
@@ -902,10 +966,30 @@ ${promptParts.join('\n\n')}`;
       }
     }
 
+    if (pageType === 'ungraded') {
+      const currentId = getCurrentItemId();
+      if (currentId) {
+        let launchFound = false;
+        for (let i = 0; i < 15; i++) { throwIfStopped(); if (findLaunchAppButton()) { launchFound = true; break; } await delay(1000); }
+        if (launchFound) {
+          await clickLabAgreeAndLaunch();
+          chrome.runtime.sendMessage({ type: 'CLOSE_LAB_TABS' }).catch(() => {});
+          await clickMarkCompleteButton({ id: currentId });
+        } else {
+          await completeItemOnPage({ id: currentId, type: 'ungraded', name: C.currentItem });
+        }
+        if (!C.completedItems.includes(currentId)) C.completedItems.push(currentId);
+        C.stats.completed++; C.navigatingToItem = ''; await save(); await delay(DELAY);
+        if (await navigateToNextItem()) return;
+        navigateTo(`/learn/${C.slug}/home/module/${C.currentModule}`); return;
+      }
+    }
+
     if (C.navigatingToItem) {
       const navId = extractItemIdFromHref(C.navigatingToItem);
       const currentId = getCurrentItemId();
       if (navId && currentId && navId === currentId) {
+        await delay(1500);
         const contentType = detectPageTypeFromContent();
         C.navigatingToItem = ''; await save();
 
@@ -915,11 +999,13 @@ ${promptParts.join('\n\n')}`;
             if (!C.completedItems.includes(currentId)) C.completedItems.push(currentId);
             C.stats.completed++;
           } catch (err) {
+            if (err.message === '__STOPPED__') { log('Quiz stopped by user'); await save(); return; }
             if (err.message && err.message.startsWith('SKIP_ITEM:')) { console.warn('CA: quiz skipped —', err.message); C.stats.skipped++; }
             else { console.error('CA: quiz failed', err); C.stats.failed++; }
             if (!C.completedItems.includes(currentId)) C.completedItems.push(currentId);
+            await save(); await delay(500);
+            clickBackButton(); return;
           }
-          await save(); await delay(1500);
         } else if (contentType === 'lab') {
           await clickLabAgreeAndLaunch();
           chrome.runtime.sendMessage({ type: 'CLOSE_LAB_TABS' }).catch(() => {});
@@ -957,11 +1043,14 @@ ${promptParts.join('\n\n')}`;
       const currentId = getCurrentItemId() || Date.now().toString();
       try { await solveQuizOnPage(); if (!C.completedItems.includes(currentId)) C.completedItems.push(currentId); C.stats.completed++; }
       catch (err) {
+        if (err.message === '__STOPPED__') { log('Quiz stopped by user'); await save(); return; }
         if (err.message && err.message.startsWith('SKIP_ITEM:')) { console.warn('CA: quiz skipped —', err.message); C.stats.skipped++; }
         else { C.stats.failed++; }
         if (!C.completedItems.includes(currentId)) C.completedItems.push(currentId);
       }
-      await save(); C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save(); return;
+      if (C.status !== 'running') { C.phase = 'paused'; await save(); return; }
+      await save(); await delay(500);
+      clickBackButton(); return;
     }
     if (contentType === 'dialogue') {
       const currentId = getCurrentItemId() || Date.now().toString();
@@ -1013,7 +1102,7 @@ ${promptParts.join('\n\n')}`;
     document.head.appendChild(overlayStyle);
     document.body.appendChild(overlayEl);
     overlayEl.querySelector('#ca-msg').textContent = msg;
-    overlayEl.querySelector('#ca-stop').onclick = () => { C.status = 'paused'; save(); log('STOPPED by user'); updateOverlay('Stopped'); };
+    overlayEl.querySelector('#ca-stop').onclick = () => { C.status = 'done'; save(); log('STOPPED by user'); removeOverlay(); };
   }
 
   function updateOverlay(msg, pct) {
@@ -1054,15 +1143,10 @@ ${promptParts.join('\n\n')}`;
   (async function init() {
     const currentSlug = getCourseSlug();
     if (!currentSlug) return;
-    await load();
+    await load(currentSlug);
+    C.slug = currentSlug;
     const keyData = await new Promise(r => chrome.storage.local.get('groqApiKey', r));
     if (keyData.groqApiKey) groqApiKey = keyData.groqApiKey;
-
-    if (C.slug && C.slug !== currentSlug) {
-      C = { ...C, status: 'idle', phase: 'idle', slug: currentSlug, totalModules: 0, items: [], completedItems: [], stats: { total: 0, completed: 0, failed: 0, skipped: 0 }, lastPageUrl: '', samePageCount: 0, navigatingToItem: '', rateLimited: false };
-      await chrome.storage.local.set({ caState: null }); return;
-    }
-    C.slug = currentSlug;
 
     if (C.status === 'running' && groqApiKey) {
       await waitForBody();
