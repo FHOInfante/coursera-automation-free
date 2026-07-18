@@ -63,21 +63,33 @@
   let retryOverlay = null;
   let overlayEl = null;
   let overlayStyle = null;
+  let tabId = null;
 
   function log(msg) {
     console.log(`[CA] ${msg}`);
     C.currentItem = msg;
   }
 
-  function storageKey(slug) { return `caState_${slug || C.slug || getCourseSlug() || 'default'}`; }
+  function storageKey(slug) { return `caState_${tabId || slotId()}`; }
+  function slotId() { return C._slot || (C._slot = Math.random().toString(36).slice(2, 10)); }
 
   async function save() {
     const key = storageKey();
     if (key) await chrome.storage.local.set({ [key]: C });
+    chrome.runtime.sendMessage({
+      type: 'UPDATE_TAB',
+      slug: C.slug,
+      status: C.status,
+      phase: C.phase,
+      stats: C.stats,
+      currentItem: C.currentItem,
+      currentModule: C.currentModule,
+      totalModules: C.totalModules
+    }).catch(() => {});
   }
 
   async function load(slug) {
-    const key = storageKey(slug);
+    const key = storageKey();
     const data = await chrome.storage.local.get(key);
     if (data[key]) {
       C = { ...C, ...data[key] };
@@ -1143,10 +1155,37 @@ ${promptParts.join('\n\n')}`;
   (async function init() {
     const currentSlug = getCourseSlug();
     if (!currentSlug) return;
-    await load(currentSlug);
+
+    try {
+      const info = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: 'GET_TAB_INFO' }, r => resolve(r || null));
+        setTimeout(() => resolve(null), 2000);
+      });
+      if (info) tabId = info.tabId;
+    } catch (e) {}
+
+    await load();
+
+    if (C.slug && C.slug !== currentSlug) {
+      await clearState();
+      await load();
+    }
     C.slug = currentSlug;
+
     const keyData = await new Promise(r => chrome.storage.local.get('groqApiKey', r));
     if (keyData.groqApiKey) groqApiKey = keyData.groqApiKey;
+
+    chrome.runtime.sendMessage({
+      type: 'REGISTER_TAB',
+      tabId,
+      slug: C.slug,
+      status: C.status,
+      phase: C.phase,
+      stats: C.stats,
+      currentItem: C.currentItem,
+      currentModule: C.currentModule,
+      totalModules: C.totalModules
+    }).catch(() => {});
 
     if (C.status === 'running' && groqApiKey) {
       await waitForBody();

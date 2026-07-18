@@ -131,6 +131,118 @@ body {
   transition: width 0.5s ease;
 }
 
+#tabList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px 16px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  transition: all 0.2s ease;
+}
+
+.tab-row:hover {
+  border-color: var(--glass-border);
+}
+
+.tab-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-slug {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.tab-status {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.tab-status.running { color: var(--primary); }
+.tab-status.done { color: #00ccff; }
+.tab-status.idle { color: var(--text-dim); }
+
+.tab-progress {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.tab-bar {
+  height: 3px;
+  background: #333;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tab-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #00ccff);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.tab-btn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.run-btn {
+  background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,204,255,0.15));
+  border: 1px solid var(--primary);
+  color: #fff;
+}
+
+.run-btn:hover {
+  background: linear-gradient(135deg, rgba(0,255,136,0.3), rgba(0,204,255,0.25));
+  box-shadow: 0 0 15px rgba(0,255,136,0.2);
+}
+
+.stop-btn {
+  background: rgba(255,68,68,0.15);
+  border: 1px solid rgba(255,68,68,0.4);
+  color: #ff4444;
+}
+
+.stop-btn:hover {
+  background: rgba(255,68,68,0.25);
+}
+
 #featureGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

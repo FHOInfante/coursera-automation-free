@@ -1,102 +1,92 @@
 (function () {
-  const FEATURES = [
-    { id: 'quizAutomation', label: 'Quiz Automation', icon: '✅', desc: 'Answer quiz on current page' },
-  ];
-
-  const featureGrid = document.getElementById('featureGrid');
+  const tabListEl = document.getElementById('tabList');
   const statusEl = document.getElementById('caStatus');
   const statusMsg = document.getElementById('caStatusMsg');
   const statusFill = document.getElementById('caStatusFill');
   let pollTimer = null;
 
-  FEATURES.forEach((f) => {
-    const w = document.createElement('div');
-    w.className = 'featureBtnWrapper';
-    const b = document.createElement('button');
-    b.className = 'featureBtn';
-    b.id = f.id;
-    b.innerHTML = `<span>${f.icon} ${f.label}</span><span class="featureBadge">FREE</span>`;
-    b.onclick = () => handleFeatureClick(f.id);
-    const t = document.createElement('div');
-    t.className = 'featureTooltip';
-    t.textContent = f.desc;
-    w.appendChild(b);
-    w.appendChild(t);
-    featureGrid.appendChild(w);
-  });
-
   document.getElementById('settingsBtn').onclick = () => chrome.runtime.openOptionsPage();
-  document.getElementById('runAllBtn').onclick = () => handleFeatureClick('runAll');
 
-  function pollStatus() {
-    chrome.runtime.sendMessage({ type: 'SEND_TO_CONTENT', payload: { action: 'getStatus' } }, (r) => {
-      if (r && r.status === 'running') {
-        statusEl.classList.remove('hidden');
-        statusMsg.textContent = `${r.stats.completed}/${r.stats.total} items (M${r.currentModule})`;
-        const pct = r.stats.total > 0 ? Math.round(r.stats.completed / r.stats.total * 100) : 0;
-        statusFill.style.width = pct + '%';
-      } else if (r && r.status === 'done') {
-        statusEl.classList.remove('hidden');
-        statusMsg.textContent = `\u2705 Done \u2014 ${r.stats.completed} items completed`;
-        statusFill.style.width = '100%';
+  function renderTabEntry(tabId, data) {
+    const pct = data.stats && data.stats.total > 0
+      ? Math.round((data.stats.completed || 0) / data.stats.total * 100) : 0;
+    const isRunning = data.status === 'running';
+    const isDone = data.status === 'done';
+    const statusClass = isRunning ? 'running' : isDone ? 'done' : 'idle';
+    const action = isRunning ? 'stop' : 'run';
+    const label = isRunning ? '\u23F9 Stop' : isDone ? '\u21A9 Restart' : '\u25B6 Run';
+
+    const row = document.createElement('div');
+    row.className = 'tab-row';
+    row.innerHTML = `
+      <div class="tab-info">
+        <div class="tab-slug" title="${data.slug || 'Unknown'}">${data.slug || 'Unknown course'}</div>
+        <div class="tab-status ${statusClass}">${isRunning ? 'Running' : isDone ? 'Done' : 'Idle'}</div>
+        <div class="tab-progress">${data.stats ? data.stats.completed + '/' + data.stats.total : '0/0'}</div>
+        <div class="tab-bar"><div class="tab-fill" style="width:${pct}%"></div></div>
+      </div>
+      <button class="tab-btn ${action}-btn" data-tab-id="${tabId}" data-action="${action}">${label}</button>
+    `;
+
+    row.querySelector('.tab-btn').onclick = () => {
+      const tid = parseInt(tabId);
+      const act = action;
+      if (act === 'run') {
+        chrome.runtime.sendMessage({
+          type: 'SEND_TO_CONTENT',
+          tabId: tid,
+          payload: { action: 'runAll' }
+        }, () => { setTimeout(refreshTabList, 1000); });
+      } else {
+        chrome.runtime.sendMessage({
+          type: 'SEND_TO_CONTENT',
+          tabId: tid,
+          payload: { action: 'stopAutomation' }
+        }, () => { setTimeout(refreshTabList, 500); });
+      }
+    };
+
+    return row;
+  }
+
+  function refreshTabList() {
+    chrome.runtime.sendMessage({ type: 'GET_REGISTRY' }, (response) => {
+      const registry = (response && response.registry) || {};
+      const entries = Object.entries(registry);
+
+      if (entries.length === 0) {
+        tabListEl.innerHTML = '<div class="empty-state">No Coursera tabs running automation.<br>Open a course page and click <strong>Run</strong>.</div>';
+        statusEl.classList.add('hidden');
         if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = null;
         return;
+      }
+
+      let hasRunning = false;
+      tabListEl.innerHTML = '';
+      for (const [tid, data] of entries) {
+        tabListEl.appendChild(renderTabEntry(tid, data));
+        if (data.status === 'running') hasRunning = true;
+      }
+
+      if (hasRunning) {
+        statusEl.classList.remove('hidden');
+        const total = entries.reduce((s, [, d]) => s + (d.stats ? d.stats.total : 0), 0);
+        const completed = entries.reduce((s, [, d]) => s + (d.stats ? d.stats.completed : 0), 0);
+        statusMsg.textContent = `${completed}/${total} items across ${entries.length} tab${entries.length > 1 ? 's' : ''}`;
+        const pct = total > 0 ? Math.round(completed / total * 100) : 0;
+        statusFill.style.width = pct + '%';
       } else {
         statusEl.classList.add('hidden');
       }
-      if (pollTimer) pollTimer = setTimeout(pollStatus, 2000);
     });
   }
 
-  function setStatus(text, isError) {
-    const existing = document.getElementById('statusMsg');
-    if (existing) existing.remove();
-    const d = document.createElement('div');
-    d.id = 'statusMsg';
-    d.style.cssText = `padding:10px 12px;border-radius:10px;font-size:12px;text-align:center;${
-      isError ? 'background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);color:#ff4444;' : 'background:var(--glass);border:1px solid var(--glass-border);color:var(--text-dim);'
-    }`;
-    d.textContent = text;
-    featureGrid.parentNode.insertBefore(d, featureGrid.nextSibling);
-    setTimeout(() => d.remove(), 4000);
+  function pollLoop() {
+    refreshTabList();
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(pollLoop, 3000);
   }
 
-  function handleFeatureClick(featureId) {
-    const btn = document.getElementById(featureId);
-    const originalText = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span>\u23F3 Processing...</span>'; }
-
-    chrome.runtime.sendMessage({ type: 'QUERY_TAB' }, (response) => {
-      if (!response || !response.url) {
-        if (btn) { btn.disabled = false; if (originalText) btn.innerHTML = originalText; }
-        setStatus('No active tab found', true);
-        return;
-      }
-      if (!response.url.includes('coursera.org')) {
-        if (btn) { btn.disabled = false; if (originalText) btn.innerHTML = originalText; }
-        setStatus('Open a Coursera course page first', true);
-        return;
-      }
-
-      chrome.runtime.sendMessage({
-        type: 'SEND_TO_CONTENT',
-        payload: { action: featureId }
-      }, (result) => {
-        if (btn) { btn.disabled = false; if (originalText) btn.innerHTML = originalText; }
-        if (featureId === 'runAll') {
-          setStatus('\u25B6\uFE0F Running... Check Coursera page overlay');
-          statusEl.classList.remove('hidden');
-          statusMsg.textContent = 'Running...';
-          pollStatus();
-          return;
-        }
-        if (result && result.success) setStatus('\u2705 ' + (result.message || 'Done!'));
-        else if (result && result.error) setStatus('\u26A0\uFE0F ' + result.error, true);
-        else if (chrome.runtime.lastError) setStatus('\u26A0\uFE0F Reload Coursera page and try again', true);
-        else setStatus('\u2705 Sent!');
-      });
-    });
-  }
-
-  pollStatus();
+  pollLoop();
 })();
