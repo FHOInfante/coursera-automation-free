@@ -3,7 +3,7 @@
   "name": "Course Automation",
   "version": "1.1.0",
   "author": "Personal Use",
-  "description": "Automate Coursera course tasks: quiz, video, reading material, ungraded plugin, and discussion completion.",
+  "description": "Automate Coursera and LinkedIn Learning course tasks: quiz, video, reading material, ungraded plugin, discussion completion, and more.",
   "permissions": [
     "storage",
     "activeTab",
@@ -31,6 +31,12 @@
       "matches": ["*://*.coursera.org/*"],
       "js": ["dist/scripts/interceptor.js", "dist/scripts/content.js"],
       "css": ["dist/ui/content.css"]
+    },
+    {
+      "run_at": "document_start",
+      "matches": ["*://*.linkedin.com/learning/*"],
+      "js": ["dist/scripts/linkedin-interceptor.js", "dist/scripts/content-linkedin.js"],
+      "css": ["dist/ui/content.css"]
     }
   ],
   "commands": {
@@ -52,8 +58,8 @@
   "web_accessible_resources": [
     {
       "resources": ["dist/scripts/inject.js"],
-      "matches": ["*://*.coursera.org/*"]
+      "matches": ["*://*.coursera.org/*", "*://*.linkedin.com/*"]
     }
   ],
-  "host_permissions": ["*://*.coursera.org/*", "*://*.groq.com/*"]
+  "host_permissions": ["*://*.coursera.org/*", "*://*.linkedin.com/*", "*://*.groq.com/*"]
 }

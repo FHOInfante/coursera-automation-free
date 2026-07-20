@@ -55,7 +55,7 @@
       const entries = Object.entries(registry);
 
       if (entries.length === 0) {
-        tabListEl.innerHTML = '<div class="empty-state">No Coursera tabs running automation.<br>Open a course page and click <strong>Run</strong>.</div>';
+        tabListEl.innerHTML = '<div class="empty-state">No course tabs running automation.<br>Open a course page (Coursera or LinkedIn Learning) and click <strong>Run</strong>.</div>';
         statusEl.classList.add('hidden');
         if (pollTimer) clearTimeout(pollTimer);
         pollTimer = null;

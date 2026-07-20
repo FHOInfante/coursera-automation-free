@@ -34,7 +34,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url && tabRegistry.has(tabId)) {
-    if (!changeInfo.url.includes('coursera.org')) {
+    if (!changeInfo.url.includes('coursera.org') && !changeInfo.url.includes('linkedin.com/learning')) {
       tabRegistry.delete(tabId);
     }
   }
