@@ -2,23 +2,11 @@
   const DELAY = 800;
   const TIMEOUT = 30000;
 
-  const TOC_ITEM_SELECTORS = [
-    '[class*="toc-item"] a, [class*="toc-entry"] a',
-    '[class*="syllabus-item"] a, [class*="chapter-item"] a',
-    '[data-control-name*="toc"] a, [data-control-name*="chapter"] a',
-    '[class*="course-navigation"] a[href*="/learning/"]',
-    '[class*="sidebar"] a[href*="/learning/"]',
-    '[class*="table-of-contents"] a[href*="/learning/"]',
-    '[class*="course-contents"] a[href*="/learning/"]',
-    'li a[href*="/learning/"][href*="/"]:not([href$="/learning/"])',
-    '[role="treeitem"] a, [role="listitem"] a[href*="/learning/"]',
-  ];
-
   const COMPLETED_SELECTORS = [
     '[class*="completed"]', '[class*="viewed"]',
     '[aria-label*="completed" i]', '[data-test="completed"]',
-    '[data-control-name="completed"]', '[class*="check"] svg',
-    'svg[class*="check"]', '[class*="progress-icon"][class*="complete"]',
+    'svg[class*="check"]', '[class*="check"]',
+    '[class*="progress-icon"][class*="complete"]',
     '[class*="status"][class*="done"]',
   ];
 
@@ -36,8 +24,6 @@
     '[class*="QuizQuestion"]', '[class*="multiple-choice"]',
   ];
 
-  const COURSE_ITEM_PATH_RE = /\/([^/]+)\/([^/?#]+)(?:\/quiz\/(\d+))?/;
-
   let C = {
     status: 'idle',
     slug: '',
@@ -53,6 +39,7 @@
     samePageCount: 0,
     navigatingToItem: '',
     rateLimited: false,
+    tocItemLinks: [],
   };
 
   let groqApiKey = '';
@@ -63,6 +50,7 @@
   let tabId = null;
   let lastUrl = location.href;
   let urlCheckTimer = null;
+  let contentObserver = null;
 
   function log(msg) { console.log(`[CA-LI] ${msg}`); C.currentItem = msg; }
 
@@ -74,13 +62,9 @@
     if (key) await chrome.storage.local.set({ [key]: C });
     chrome.runtime.sendMessage({
       type: 'UPDATE_TAB',
-      slug: C.slug,
-      status: C.status,
-      phase: C.phase,
-      stats: C.stats,
-      currentItem: C.currentItem,
-      currentModule: C.currentChapter,
-      totalModules: C.totalChapters,
+      slug: C.slug, status: C.status, phase: C.phase,
+      stats: C.stats, currentItem: C.currentItem,
+      currentModule: C.currentChapter, totalModules: C.totalChapters,
     }).catch(() => {});
   }
 
@@ -92,7 +76,7 @@
 
   async function clearState() {
     const key = storageKey();
-    C = { ...C, status: 'idle', phase: 'idle', items: [], completedItems: [], stats: { total: 0, completed: 0, failed: 0, skipped: 0 }, lastPageUrl: '', samePageCount: 0, navigatingToItem: '', rateLimited: false };
+    C = { ...C, status: 'idle', phase: 'idle', items: [], completedItems: [], stats: { total: 0, completed: 0, failed: 0, skipped: 0 }, lastPageUrl: '', samePageCount: 0, navigatingToItem: '', rateLimited: false, tocItemLinks: [] };
     if (key) await chrome.storage.local.remove(key);
   }
 
@@ -104,42 +88,27 @@
   function throwIfStopped() { if (C.status !== 'running') throw new Error('__STOPPED__'); }
 
   function isOnLearning() { return location.hostname.includes('linkedin.com') && location.pathname.startsWith('/learning/'); }
-
   function getCourseSlug() { const m = location.pathname.match(/\/learning\/([^/?#]+)/); return m ? m[1] : null; }
 
   function getCurrentItemSlug() {
-    const parts = location.pathname.split('/').filter(Boolean);
-    if (parts.length < 3) return null;
-    return parts.slice(2).join('/');
+    const path = location.pathname.replace(/\/$/,'');
+    const prefix = `/learning/${getCourseSlug()}`;
+    if (path === prefix) return null;
+    return path.replace(prefix + '/', '');
   }
 
   function getPageType() {
     if (!isOnLearning()) return 'other';
     const path = location.pathname;
     if (/\/quiz\//.test(path)) return 'quiz';
-    if (/\/learning\/[^/]+\/?$/.test(path) || path === `/learning/${getCourseSlug()}`) return 'home';
+    const prefix = `/learning/${getCourseSlug()}`;
+    if (path === prefix || path === prefix + '/') return 'home';
     if (document.querySelector('video')) return 'video';
-    if (document.querySelector('[class*="video-player"], [class*="VideoPlayer"], [data-control-name="video-player"]')) return 'video';
-    const viewLinks = document.querySelectorAll('a[href*="/learning/"]');
-    if (viewLinks.length > 5) return 'home';
     return 'other';
   }
 
-  function getItemTypeFromHref(href) {
-    if (!href) return 'other';
-    if (href.includes('/quiz/')) return 'quiz';
-    if (href.includes('/article/')) return 'article';
-    return 'video';
-  }
-
   function scrollToBottom() { window.scrollTo(0, document.body.scrollHeight); }
-
-  async function scrollPageToBottom() {
-    scrollToBottom();
-    await delay(500);
-    scrollToBottom();
-    await delay(500);
-  }
+  async function scrollPageToBottom() { scrollToBottom(); await delay(500); scrollToBottom(); await delay(500); }
 
   function clickElement(el) {
     el.scrollIntoView({ behavior: 'instant', block: 'center' });
@@ -154,8 +123,7 @@
       const btn = document.querySelector(sel);
       if (btn && btn.offsetParent !== null) return btn;
     }
-    const buttons = [...document.querySelectorAll('button, a, [role="button"]')];
-    return buttons.find(b =>
+    return [...document.querySelectorAll('button, a, [role="button"]')].find(b =>
       /mark as completed|mark complete|complete/i.test(b.textContent.trim()) ||
       /complete/i.test(b.getAttribute('aria-label') || '')
     ) || null;
@@ -163,23 +131,21 @@
 
   async function clickMarkComplete(item) {
     let btn = null;
-    for (let s = 0; s < 5; s++) {
+    for (let s = 0; s < 8; s++) {
       throwIfStopped();
-      window.scrollTo(0, document.body.scrollHeight * (s + 1) / 5);
+      window.scrollTo(0, document.body.scrollHeight * (s + 1) / 8);
       await delay(600);
       btn = findPageCompleteButton();
       if (btn) break;
     }
-    if (!btn) {
-      window.scrollTo(0, 0);
-      btn = findPageCompleteButton();
-    }
+    if (!btn) { window.scrollTo(0, 0); btn = findPageCompleteButton(); }
     if (!btn) { log(`No completion button for ${item.id}`); return false; }
     log('Clicking mark-as-complete button');
     clickElement(btn);
     for (let i = 0; i < 10; i++) {
       await delay(500);
-      if (!document.contains(btn) || btn.disabled || btn.getAttribute('aria-disabled') === 'true') { log(`Completion confirmed for ${item.id}`); return true; }
+      const removed = !document.contains(btn) || btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+      if (removed) { log(`Completion confirmed for ${item.id}`); return true; }
     }
     log(`Completion clicked for ${item.id}`);
     return true;
@@ -194,21 +160,42 @@
       await delay(1000);
     }
     if (!video || !video.duration || !isFinite(video.duration) || video.duration <= 0) { log('Video not ready after 15s'); return false; }
-    if (video.readyState < 2) {
-      video.play().catch(() => {});
-      await delay(2000);
-    }
-    video.pause();
-    const seekTime = Math.max(0, video.duration - 0.5);
+    if (video.readyState < 2) { video.play().catch(() => {}); await delay(2000); }
+    log(`Video duration: ${video.duration.toFixed(1)}s`);
+
+    const seekTime = Math.max(0, video.duration - 1);
     video.currentTime = seekTime;
     video.dispatchEvent(new Event('timeupdate'));
-    log(`Video seeked to ${seekTime.toFixed(1)}s / ${video.duration.toFixed(1)}s`);
-    await delay(1500);
-    video.currentTime = seekTime;
+    video.play().catch(() => {});
+    log(`Video seeked to ${seekTime.toFixed(1)}s, playing briefly...`);
+    await delay(2000);
+
+    video.currentTime = video.duration - 0.5;
     video.dispatchEvent(new Event('timeupdate'));
-    video.dispatchEvent(new Event('ended'));
-    await delay(1000);
+    log('Waiting for LinkedIn API to register completion...');
+    await delay(8000);
     return true;
+  }
+
+  function isItemCompletedInToc(itemId) {
+    const tocLinks = findAllTocLinks();
+    for (const link of tocLinks) {
+      const href = link.getAttribute('href') || '';
+      if (href.includes(itemId)) {
+        const parent = link.closest('li, [class*="toc-item"], [class*="toc-entry"], [class*="item"], [role="treeitem"]');
+        if (parent) {
+          for (const sel of COMPLETED_SELECTORS) {
+            if (parent.querySelector(sel)) return true;
+          }
+        }
+        const icon = parent ? parent.querySelector('svg, [class*="icon"], [class*="indicator"]') : null;
+        if (icon) {
+          const svg = icon.closest('svg') || icon.querySelector('svg');
+          if (svg && svg.innerHTML.includes('check')) return true;
+        }
+      }
+    }
+    return false;
   }
 
   async function completeItem(item) {
@@ -217,14 +204,19 @@
     await delay(2000);
 
     if (item.type === 'video') {
-      if (await seekVideoToEnd()) {
-        log('Video seeked, waiting for auto-completion...');
-        await delay(3000);
-      } else {
-        log('Could not seek video, waiting 8s...');
-        await delay(8000);
+      const seeked = await seekVideoToEnd();
+      if (!seeked) await delay(8000);
+
+      const marked = await clickMarkComplete(item);
+      if (!marked) {
+        log('No mark-complete button found, checking TOC for auto-completion...');
+        for (let i = 0; i < 6; i++) {
+          throwIfStopped();
+          if (isItemCompletedInToc(item.id)) { log(`TOC shows ${item.id} as completed`); return true; }
+          await delay(2000);
+        }
+        log(`Giving up on completion check for ${item.id}, proceeding`);
       }
-      await clickMarkComplete(item);
       return true;
     }
 
@@ -238,82 +230,82 @@
     return true;
   }
 
+  function findAllTocLinks() {
+    const links = new Set();
+
+    const sidebar = document.querySelector(
+      '[class*="course-navigation"], [class*="course-contents"], [class*="table-of-contents"], [class*="sidebar"], [class*="toc"], [class*="syllabus"], [aria-label*="table of contents" i], [aria-label*="course content" i]'
+    );
+    if (sidebar) {
+      sidebar.querySelectorAll('a').forEach(a => links.add(a));
+    }
+
+    document.querySelectorAll('a[href*="/learning/"]').forEach(a => {
+      const href = a.getAttribute('href') || '';
+      const slug = getCourseSlug();
+      if (slug && href.includes(slug)) links.add(a);
+    });
+
+    document.querySelectorAll('[role="treeitem"] a, [role="listitem"] a, [role="tab"] a').forEach(a => {
+      const href = a.getAttribute('href') || '';
+      if (href.includes('/learning/')) links.add(a);
+    });
+
+    return [...links];
+  }
+
   function extractItemsFromTOC() {
     const seen = new Set();
     const items = [];
+    const slug = getCourseSlug();
+    if (!slug) return items;
 
-    const allLinks = new Set();
-    for (const sel of TOC_ITEM_SELECTORS) {
-      for (const el of document.querySelectorAll(sel)) {
-        allLinks.add(el);
-      }
-    }
-    if (allLinks.size === 0) {
-      document.querySelectorAll('a[href*="/learning/"]').forEach(el => allLinks.add(el));
-    }
+    const allLinks = findAllTocLinks();
+    log(`Found ${allLinks.length} potential TOC links`);
 
     for (const link of allLinks) {
-      const href = link.getAttribute('href') || link.getAttribute('data-href') || '';
-      if (!href || !href.includes('/learning/')) continue;
-      const slug = getCourseSlug();
-      if (!slug || !href.includes(slug)) continue;
+      const href = (link.getAttribute('href') || '').split('?')[0];
+      if (!href.includes('/learning/') || !href.includes(slug)) continue;
       if (href === `/learning/${slug}` || href === `/learning/${slug}/`) continue;
 
-      const parts = href.split('/').filter(Boolean);
-      if (parts.length < 3) continue;
-
-      const itemId = parts.slice(2).join('/');
+      const path = href.replace(/\/$/,'');
+      const prefix = `/learning/${slug}`;
+      const itemId = path.startsWith(prefix + '/') ? path.replace(prefix + '/', '') : null;
       if (!itemId || seen.has(itemId)) continue;
       seen.add(itemId);
 
       const text = (link.getAttribute('aria-label') || link.textContent || '').trim();
       if (!text || text.length < 2) continue;
 
-      const parent = link.closest('[class*="toc-item"], [class*="toc-entry"], [class*="chapter-item"], li, [role="treeitem"], [role="listitem"], [class*="item"]');
-      const isCompleted = parent ? isElementCompleted(parent) : false;
+      const parent = link.closest('li, [class*="toc-item"], [class*="toc-entry"], [class*="item"], [role="treeitem"], [class*="chapter-item"], span, div');
+      let completed = false;
+      if (parent) {
+        for (const sel of COMPLETED_SELECTORS) {
+          if (parent.querySelector(sel)) { completed = true; break; }
+        }
+      }
 
       items.push({
         id: itemId,
-        type: getItemTypeFromHref(href),
+        type: itemId.includes('/quiz/') ? 'quiz' : 'video',
         name: text,
-        href,
-        completed: isCompleted,
+        href: href.startsWith('/') ? href : '/' + href,
+        completed,
+        element: parent || link,
       });
     }
 
+    const chapters = items.filter(i => /^(chapter|section)/i.test(i.name));
+    if (chapters.length > 0) C.totalChapters = chapters.length;
+    log(`Extracted ${items.length} items from TOC (${items.filter(i => i.completed).length} completed)`);
     return items;
-  }
-
-  function isElementCompleted(el) {
-    for (const sel of COMPLETED_SELECTORS) {
-      if (el.querySelector(sel)) return true;
-    }
-    if (el.getAttribute('aria-current') === 'step') {
-      const completed = el.querySelector('[class*="completed"], [class*="check"]');
-      if (completed) return true;
-    }
-    const text = el.textContent.toLowerCase();
-    if (/completed|viewed|done/i.test(text) && el.querySelector('svg, [class*="icon"]')) return true;
-    return false;
   }
 
   function findCompletedItems() {
     const completed = new Set();
-    const allItems = extractItemsFromTOC();
-    for (const item of allItems) {
+    const items = extractItemsFromTOC();
+    for (const item of items) {
       if (item.completed) completed.add(item.id);
-    }
-    const alreadyDone = document.querySelectorAll(COMPLETED_SELECTORS.map(s => s + ', a ' + s).join(', '));
-    for (const el of alreadyDone) {
-      const link = el.closest('a') || el.querySelector('a');
-      if (link) {
-        const href = link.getAttribute('href') || '';
-        const parts = href.split('/').filter(Boolean);
-        if (parts.length >= 3) {
-          const itemId = parts.slice(2).join('/');
-          if (itemId) completed.add(itemId);
-        }
-      }
     }
     if (completed.size > 0) log(`Found ${completed.size} completed items`);
     return completed;
@@ -321,16 +313,35 @@
 
   function navigateTo(url) { log(`Navigating to: ${url}`); window.location.href = url; }
 
+  async function clickNextTocItem(remaining) {
+    if (remaining.length === 0) return false;
+    const next = remaining[0];
+    if (next.element) {
+      log(`Clicking TOC item: ${next.name}`);
+      clickElement(next.element.querySelector('a') || next.element);
+      await delay(2000);
+      C.navigatingToItem = next.href; await save();
+      return true;
+    }
+    return false;
+  }
+
   async function navigateToNextItem() {
     const remaining = C.items.filter(i => !C.completedItems.includes(i.id));
-    if (remaining.length > 0) {
-      const next = remaining[0];
-      C.navigatingToItem = next.href; await save();
-      navigateTo(next.href); return true;
+    if (remaining.length === 0) {
+      log('All items completed!');
+      C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save();
+      return false;
     }
-    log('All items completed!');
-    C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save();
-    return false;
+    const next = remaining[0];
+    log(`Next item: ${next.name} (${next.id})`);
+
+    if (await clickNextTocItem(remaining)) return true;
+
+    log('TOC click failed, using URL navigation');
+    C.navigatingToItem = next.href; await save();
+    navigateTo(next.href);
+    return true;
   }
 
   async function solveQuiz() {
@@ -358,7 +369,7 @@
     }
     if (questions.length === 0) throw new Error('Could not find quiz questions');
 
-    const extracted = questions.map((qEl, idx) => {
+    const extracted = questions.map((qEl) => {
       const clone = qEl.cloneNode(true);
       clone.querySelectorAll('input, button, textarea, select').forEach(e => e.remove());
       const questionText = clone.textContent.replace(/\s+/g, ' ').trim();
@@ -425,7 +436,6 @@ ${promptParts.join('\n\n')}`;
       }
       result = null;
     }
-
     if (!result) throw new Error('Failed to parse quiz response from Groq');
 
     const answerMap = (result?.answers || (result?.answer ? [{ question: 1, answer: result.answer }] : [])).reduce((map, entry) => {
@@ -443,16 +453,13 @@ ${promptParts.join('\n\n')}`;
       const q = answerable[qIdx];
       const num = qIdx + 1;
       const answers = answerMap[num] || [];
-
       if (q.textareas.length > 0 || q.textInputs.length > 0) {
         const text = answers[0] || '';
         for (const ta of q.textareas) setReactInputValue(ta, text);
         for (const ti of q.textInputs) setReactInputValue(ti, text);
         C.stats.completed++; await save(); continue;
       }
-
       if (q.choices.length === 0) { C.stats.skipped++; await save(); continue; }
-
       for (const choice of q.choices) {
         const shouldSelect = answers.includes(choice.letter);
         const isSelected = choice.element.checked || choice.element.getAttribute('aria-checked') === 'true';
@@ -462,7 +469,6 @@ ${promptParts.join('\n\n')}`;
     }
 
     await delay(1000);
-
     let submitBtn = null;
     for (let i = 0; i < 15; i++) {
       throwIfStopped();
@@ -473,7 +479,6 @@ ${promptParts.join('\n\n')}`;
       if (submitBtn) break;
       await delay(1000);
     }
-
     if (submitBtn) {
       clickElement(submitBtn);
       for (let i = 0; i < 20; i++) {
@@ -482,8 +487,7 @@ ${promptParts.join('\n\n')}`;
           /continue|next|view results|see results|close/i.test(b.textContent.trim())
         );
         if (nextBtn) { clickElement(nextBtn); await delay(1500); break; }
-        const done = document.querySelector('[class*="quiz-result"], [class*="QuizResult"], [data-test="quiz-result"]');
-        if (done) break;
+        if (document.querySelector('[class*="quiz-result"], [class*="QuizResult"], [data-test="quiz-result"]')) break;
       }
     }
   }
@@ -512,8 +516,7 @@ ${promptParts.join('\n\n')}`;
       catch (e) { clearInterval(stopCheck); if (e.name === 'AbortError') { log('Groq fetch aborted — stopped by user'); throw new Error('__STOPPED__'); } throw e; }
       clearInterval(stopCheck);
       if (r.ok) {
-        groqConsecutiveRateLimits = 0;
-        clearRetryOverlay();
+        groqConsecutiveRateLimits = 0; clearRetryOverlay();
         const data = await r.json();
         if (data?.choices?.[0]?.message?.content) return data.choices[0].message.content.trim();
         throw new Error('Groq: unexpected response format');
@@ -547,16 +550,11 @@ ${promptParts.join('\n\n')}`;
     document.body.prepend(retryOverlay);
     document.getElementById('ca-li-dismiss-retry')?.addEventListener('click', () => { retryOverlay?.remove(); retryOverlay = null; });
   }
-
   function updateRetryOverlay(waitSec) {
     const msg = document.getElementById('ca-li-retry-msg');
     if (msg) msg.textContent = `Groq API rate-limited. Waiting ${waitSec}s before retry...`;
   }
-
-  function clearRetryOverlay() {
-    if (retryOverlay) { retryOverlay.remove(); retryOverlay = null; }
-  }
-
+  function clearRetryOverlay() { if (retryOverlay) { retryOverlay.remove(); retryOverlay = null; } }
   function showExpiredOverlay() {
     if (retryOverlay) { retryOverlay.remove(); retryOverlay = null; }
     retryOverlay = document.createElement('div');
@@ -598,6 +596,51 @@ ${promptParts.join('\n\n')}`;
     await navigateToNextItem();
   }
 
+  async function scanAndFillItems() {
+    log('Scanning TOC for items...');
+    const items = extractItemsFromTOC();
+    const completedIds = findCompletedItems();
+    const newItems = items.filter(it => !completedIds.has(it.id) && !C.completedItems.includes(it.id));
+    C.items = items;
+    C.stats.total = items.length;
+    await save();
+
+    if (newItems.length === 0) {
+      if (C.items.length === C.completedItems.length) {
+        C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save();
+        return;
+      }
+      log('No new items found, will re-scan after delay');
+      await delay(3000);
+      if (C.status === 'running') navigateTo(`/learning/${C.slug}`);
+      return;
+    }
+
+    for (const item of newItems) {
+      if (C.status !== 'running') return;
+      updateOverlay(`${C.stats.completed + 1}/${C.stats.total} ${item.name}...`);
+
+      if (completedIds.has(item.id) || C.completedItems.includes(item.id)) {
+        C.stats.completed++; C.completedItems.push(item.id); await save(); continue;
+      }
+
+      C.navigatingToItem = item.href; await save();
+      if (item.element) {
+        const link = item.element.querySelector('a') || item.element;
+        log(`Clicking item: ${item.name}`);
+        clickElement(link);
+        await delay(2000);
+      } else {
+        navigateTo(item.href);
+      }
+      return;
+    }
+
+    if (C.items.length === C.completedItems.length) {
+      C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save();
+    }
+  }
+
   async function resumeOrStart(apiKey) {
     if (apiKey) { groqApiKey = apiKey; C.apiKey = apiKey; }
     C.status = 'running';
@@ -608,21 +651,20 @@ ${promptParts.join('\n\n')}`;
       C.samePageCount = (C.samePageCount || 0) + 1;
       if (C.samePageCount > 2) { log('Loop detected, stopping'); C.status = 'done'; await save(); return; }
     } else { C.lastPageUrl = location.href; C.samePageCount = 0; }
-
     await save();
 
     if (C.navigatingToItem) {
       const currentSlug = getCurrentItemSlug();
-      const navSlug = C.navigatingToItem.split('/').filter(Boolean).slice(2).join('/');
+      const navSlug = C.navigatingToItem.split('?')[0].replace(/\/$/,'').split('/').filter(Boolean).slice(2).join('/');
       if (navSlug && currentSlug && navSlug === currentSlug) {
         C.navigatingToItem = ''; await save();
         const pageType = getPageType();
-        if (pageType === 'quiz') {
-          await handleQuizPage(); return;
-        }
-        await delay(1500);
-        await completeItem({ id: currentSlug, type: pageType, name: C.currentItem });
-        C.stats.completed++; if (!C.completedItems.includes(currentSlug)) C.completedItems.push(currentSlug); await save(); await delay(DELAY);
+        if (pageType === 'quiz') { await handleQuizPage(); return; }
+        await delay(2000);
+        const item = C.items.find(i => i.id === currentSlug);
+        await completeItem(item || { id: currentSlug, type: pageType, name: C.currentItem });
+        if (!C.completedItems.includes(currentSlug)) C.completedItems.push(currentSlug);
+        C.stats.completed++; await save(); await delay(DELAY);
         if (await navigateToNextItem()) return;
         C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save(); return;
       }
@@ -630,15 +672,15 @@ ${promptParts.join('\n\n')}`;
     }
 
     const pageType = getPageType();
+    log(`Page type: ${pageType}, path: ${location.pathname}`);
 
-    if (pageType === 'quiz') {
-      await handleQuizPage(); return;
-    }
+    if (pageType === 'quiz') { await handleQuizPage(); return; }
 
-    if (pageType === 'video' || pageType === 'article') {
+    if (pageType === 'video') {
       const currentSlug = getCurrentItemSlug();
       if (currentSlug) {
-        await completeItem({ id: currentSlug, type: pageType, name: C.currentItem });
+        const item = C.items.find(i => i.id === currentSlug);
+        await completeItem(item || { id: currentSlug, type: 'video', name: C.currentItem });
         if (!C.completedItems.includes(currentSlug)) C.completedItems.push(currentSlug);
         C.stats.completed++; await save(); await delay(DELAY);
         if (await navigateToNextItem()) return;
@@ -647,33 +689,10 @@ ${promptParts.join('\n\n')}`;
     }
 
     if (pageType === 'home' || pageType === 'other') {
-      await delay(2000);
-      const items = extractItemsFromTOC();
-      const completedIds = findCompletedItems();
-      const newItems = items.filter(it => !completedIds.has(it.id) && !C.completedItems.includes(it.id));
-      C.items = items;
-      C.stats.total = items.length;
-      await save();
-
-      for (const item of newItems) {
-        if (C.status !== 'running') return;
-        updateOverlay(`${C.stats.completed + 1}/${C.stats.total} ${item.name}...`);
-
-        if (completedIds.has(item.id) || C.completedItems.includes(item.id)) {
-          C.stats.completed++; C.completedItems.push(item.id); await save(); continue;
-        }
-
-        C.navigatingToItem = item.href; await save();
-        navigateTo(item.href); return;
-      }
-
-      if (C.items.length === C.completedItems.length) {
-        C.phase = 'done'; C.status = 'done'; C.currentItem = 'All done!'; await save(); return;
-      }
-
-      log('No new items found, scanning again in 3s...');
+      log('On course home page, scanning TOC...');
       await delay(3000);
-      if (C.status === 'running') navigateTo(`/learning/${C.slug}`);
+      await scanAndFillItems();
+      return;
     }
   }
 
@@ -715,11 +734,7 @@ ${promptParts.join('\n\n')}`;
     el.querySelector('#ca-li-msg').textContent = msg;
     el.querySelector('#ca-li-fill').style.width = (pct !== undefined ? Math.min(pct, 100) : Math.min(Math.round((C.stats.completed / (C.stats.total || 1)) * 100), 100)) + '%';
   }
-
-  function removeOverlay() {
-    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
-    if (overlayStyle) { overlayStyle.remove(); overlayStyle = null; }
-  }
+  function removeOverlay() { if (overlayEl) { overlayEl.remove(); overlayEl = null; } if (overlayStyle) { overlayStyle.remove(); overlayStyle = null; } }
 
   function checkUrlChange() {
     if (location.href !== lastUrl) {
@@ -761,25 +776,16 @@ ${promptParts.join('\n\n')}`;
     } catch (e) {}
 
     await load();
-
-    if (C.slug && C.slug !== currentSlug) {
-      await clearState();
-      await load();
-    }
+    if (C.slug && C.slug !== currentSlug) { await clearState(); await load(); }
     C.slug = currentSlug;
 
     const keyData = await new Promise(r => chrome.storage.local.get('groqApiKey', r));
     if (keyData.groqApiKey) groqApiKey = keyData.groqApiKey;
 
     chrome.runtime.sendMessage({
-      type: 'REGISTER_TAB',
-      tabId,
-      slug: C.slug,
-      status: C.status,
-      phase: C.phase,
-      stats: C.stats,
-      currentItem: C.currentItem,
-      currentModule: C.currentChapter,
+      type: 'REGISTER_TAB', tabId, slug: C.slug,
+      status: C.status, phase: C.phase, stats: C.stats,
+      currentItem: C.currentItem, currentModule: C.currentChapter,
       totalModules: C.totalChapters,
     }).catch(() => {});
 
@@ -789,7 +795,7 @@ ${promptParts.join('\n\n')}`;
       resumeOrStart().catch(err => { console.error('[CA-LI] auto-resume error:', err); C.status = 'error'; save(); });
     } else if (C.status === 'running') { C.status = 'paused'; await save(); }
 
-    urlCheckTimer = setInterval(checkUrlChange, 2000);
+    urlCheckTimer = setInterval(checkUrlChange, 1500);
     window.addEventListener('popstate', checkUrlChange);
   })();
 })();
